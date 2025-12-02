@@ -12,7 +12,7 @@ from pydantic import BaseModel
 app = FastAPI(
     title="Aluminium Input Imputation API",
     description="Predict missing input parameters for Aluminium LCA using trained XGBoost model.",
-    version="1.0"
+    version="1.1"
 )
 
 # ----------------------------------------------------
@@ -23,7 +23,7 @@ ENCODER_URL = "https://github.com/aryanbandbe/aluminium_mv/releases/download/mod
 
 
 # ----------------------------------------------------
-# Utility function: Download file if missing
+# Utility function: download file if missing
 # ----------------------------------------------------
 def download_if_missing(url, filename):
     """Downloads a file from a URL if it's not already present locally."""
@@ -39,7 +39,7 @@ def download_if_missing(url, filename):
 
 
 # ----------------------------------------------------
-# Ensure models are available before startup
+# Ensure models are available
 # ----------------------------------------------------
 download_if_missing(MODEL_URL, "xgb_input_imputer.joblib")
 download_if_missing(ENCODER_URL, "categorical_encoder.joblib")
@@ -64,7 +64,7 @@ class AluminiumInput(BaseModel):
 
 
 # ----------------------------------------------------
-# Root endpoint (health check)
+# Root endpoint
 # ----------------------------------------------------
 @app.get("/")
 def home():
@@ -77,28 +77,33 @@ def home():
 @app.post("/predict/aluminium/inputs")
 async def predict_aluminium_inputs(data: AluminiumInput):
     try:
-        # Step 1: Convert input JSON to DataFrame
+        # Step 1: Convert input to DataFrame
         df = pd.DataFrame([data.dict()])
 
-        # Step 2: Encode categorical data
+        # Step 2: Encode categorical features
         encoded = encoder.transform(df)
-
-        # Step 3: Handle feature shape mismatch (align with training columns)
         if hasattr(encoder, "get_feature_names_out"):
-            expected_cols = encoder.get_feature_names_out()
+            encoded_cols = encoder.get_feature_names_out()
         else:
-            expected_cols = encoder.get_feature_names()
+            encoded_cols = encoder.get_feature_names()
 
-        encoded_df = pd.DataFrame(encoded, columns=expected_cols)
+        encoded_df = pd.DataFrame(encoded, columns=encoded_cols)
 
-        # Add missing columns if any are missing
+        # Step 3: Align encoded columns with model’s expected features
+        if hasattr(model, "feature_names_in_"):
+            expected_cols = model.feature_names_in_
+        else:
+            expected_cols = encoded_df.columns  # fallback if missing
+
+        # Add missing columns with zeros
         for col in expected_cols:
             if col not in encoded_df.columns:
                 encoded_df[col] = 0
 
+        # Reorder and drop unexpected columns
         encoded_df = encoded_df.reindex(columns=expected_cols, fill_value=0)
 
-        # Step 4: Predict missing inputs
+        # Step 4: Predict missing input parameters
         preds = model.predict(encoded_df)
 
         # Step 5: Create readable output
@@ -108,19 +113,18 @@ async def predict_aluminium_inputs(data: AluminiumInput):
             "alumina_input_kg", "scrap_input_kg", "total_energy_MJ"
         ])
 
-        # Step 6: Return response
         return JSONResponse(content={
             "success": True,
             "predictions": pred_df.to_dict(orient="records")[0]
         })
 
     except Exception as e:
-        # Error handling
+        # Catch & show clean error
         return JSONResponse(content={"success": False, "error": str(e)})
 
 
 # ----------------------------------------------------
-# Local run configuration
+# Local dev mode
 # ----------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
