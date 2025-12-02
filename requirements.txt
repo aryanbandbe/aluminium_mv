@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pandas
-joblib
-xgboost
 scikit-learn
+xgboost
+joblib
 requests
