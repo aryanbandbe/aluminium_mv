@@ -9,9 +9,11 @@ from pydantic import BaseModel
 # ----------------------------------------------------
 # Initialize FastAPI app
 # ----------------------------------------------------
-app = FastAPI(title="Aluminium Input Imputation API",
-              description="Predict missing input parameters for Aluminium LCA using trained XGBoost model.",
-              version="1.0")
+app = FastAPI(
+    title="Aluminium Input Imputation API",
+    description="Predict missing input parameters for Aluminium LCA using trained XGBoost model.",
+    version="1.0"
+)
 
 # ----------------------------------------------------
 # GitHub release URLs for joblib files
@@ -21,9 +23,10 @@ ENCODER_URL = "https://github.com/aryanbandbe/aluminium_mv/releases/download/mod
 
 
 # ----------------------------------------------------
-# Utility function to auto-download model files
+# Utility function: Download file if missing
 # ----------------------------------------------------
 def download_if_missing(url, filename):
+    """Downloads a file from a URL if it's not already present locally."""
     if not os.path.exists(filename):
         print(f"📥 Downloading {filename} from {url}")
         response = requests.get(url)
@@ -36,13 +39,13 @@ def download_if_missing(url, filename):
 
 
 # ----------------------------------------------------
-# Ensure models are available
+# Ensure models are available before startup
 # ----------------------------------------------------
 download_if_missing(MODEL_URL, "xgb_input_imputer.joblib")
 download_if_missing(ENCODER_URL, "categorical_encoder.joblib")
 
 # ----------------------------------------------------
-# Load models once at startup
+# Load models
 # ----------------------------------------------------
 print("🔄 Loading models...")
 model = joblib.load("xgb_input_imputer.joblib")
@@ -51,7 +54,7 @@ print("✅ Models loaded successfully.")
 
 
 # ----------------------------------------------------
-# Define input schema using Pydantic
+# Define input schema
 # ----------------------------------------------------
 class AluminiumInput(BaseModel):
     metal: str
@@ -61,7 +64,7 @@ class AluminiumInput(BaseModel):
 
 
 # ----------------------------------------------------
-# Root endpoint (for testing Render deployment)
+# Root endpoint (health check)
 # ----------------------------------------------------
 @app.get("/")
 def home():
@@ -74,34 +77,50 @@ def home():
 @app.post("/predict/aluminium/inputs")
 async def predict_aluminium_inputs(data: AluminiumInput):
     try:
-        # Convert input to DataFrame
+        # Step 1: Convert input JSON to DataFrame
         df = pd.DataFrame([data.dict()])
 
-        # Encode categorical variables
+        # Step 2: Encode categorical data
         encoded = encoder.transform(df)
 
-        # Predict missing values
-        preds = model.predict(encoded)
+        # Step 3: Handle feature shape mismatch (align with training columns)
+        if hasattr(encoder, "get_feature_names_out"):
+            expected_cols = encoder.get_feature_names_out()
+        else:
+            expected_cols = encoder.get_feature_names()
 
-        # Convert predictions into readable dictionary
+        encoded_df = pd.DataFrame(encoded, columns=expected_cols)
+
+        # Add missing columns if any are missing
+        for col in expected_cols:
+            if col not in encoded_df.columns:
+                encoded_df[col] = 0
+
+        encoded_df = encoded_df.reindex(columns=expected_cols, fill_value=0)
+
+        # Step 4: Predict missing inputs
+        preds = model.predict(encoded_df)
+
+        # Step 5: Create readable output
         pred_df = pd.DataFrame(preds, columns=[
             "electricity_MJ", "natural_gas_MJ", "diesel_MJ",
             "heavy_oil_MJ", "coal_MJ", "bauxite_input_kg",
             "alumina_input_kg", "scrap_input_kg", "total_energy_MJ"
         ])
 
-        # Return as JSON
+        # Step 6: Return response
         return JSONResponse(content={
             "success": True,
             "predictions": pred_df.to_dict(orient="records")[0]
         })
 
     except Exception as e:
+        # Error handling
         return JSONResponse(content={"success": False, "error": str(e)})
 
 
 # ----------------------------------------------------
-# Run locally (optional)
+# Local run configuration
 # ----------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
